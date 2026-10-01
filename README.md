@@ -10,4 +10,13 @@ fixtures and documentation.
 - Stack: Python, FastAPI, Postgres + pgvector, Docker Compose, GitHub Actions.
 - Decisions: [`docs/decisions/`](docs/decisions/).
 
-Status: setup.
+## Development
+
+```sh
+uv sync
+scripts/install-hooks.sh   # required: blocks personal data from being committed
+uv run pytest
+uv run ruff check . && uv run mypy
+```
+
+Status: phase 1 in progress.

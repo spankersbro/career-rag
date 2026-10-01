@@ -7,8 +7,8 @@ Commit subjects: `type: CRAG-123 - description`. Decisions: `docs/decisions/`.
 **GitHub account: `spankersbro` only.** Commits, pushes, `gh` calls, issues and PRs all use it,
 never any other account. The repo-local git config pins the author identity and a credential
 helper that always takes the `spankersbro` token, whatever `gh` account is active. For `gh`
-commands, set `GH_TOKEN="$(gh auth token --user spankersbro)"`. Do not change the local git
-config.
+commands, set `GH_TOKEN="$(gh auth token --user spankersbro)"`. Do not change the account
+settings in the local git config.
 
 **What this is.** A RAG system over a personal job-search archive plus the public ESCO skills
 catalogue. It matches a posting against evidence from past applications, flags gaps that were
@@ -26,3 +26,6 @@ never claimed, and checks salary bands against a floor. See ADR 0001.
   API.
 - Before every commit, check the staged diff for any of the above. When in doubt, leave it out
   and ask.
+- The git hooks (`scripts/install-hooks.sh`) scan every commit against the private denylist in
+  `data/pii/denylist.txt`. Never bypass them with `--no-verify`. Add new names and companies to
+  the denylist as they come up. See ADR 0002.
