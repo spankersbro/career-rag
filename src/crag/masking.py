@@ -3,6 +3,8 @@ from pathlib import Path
 
 from crag.guard import EMAIL, IBAN, INTERNATIONAL_PHONE
 
+NATIONAL_PHONE = re.compile(r"(?<![\w.])0\d{1,4}(?:[\s/-]?\d{2,4}){2,3}(?![\w.])")
+
 
 def load_people(path: Path) -> list[str]:
     if not path.exists():
@@ -26,8 +28,9 @@ class Masker:
 
     def mask(self, text: str) -> str:
         text = EMAIL.sub("[email]", text)
-        text = INTERNATIONAL_PHONE.sub("[phone]", text)
         text = IBAN.sub("[iban]", text)
+        text = INTERNATIONAL_PHONE.sub("[phone]", text)
+        text = NATIONAL_PHONE.sub("[phone]", text)
         if self._people is not None:
             text = self._people.sub("[person]", text)
         return text

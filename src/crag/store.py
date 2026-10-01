@@ -7,8 +7,8 @@ from psycopg import sql
 
 from crag.documents import Document
 
-EMBEDDING_DIMENSION = 384
-MIGRATION_LOCK_ID = 7_310_001
+EMBEDDING_DIMENSION = 384  # must match vector(384) in schema.sql; a test checks both
+MIGRATION_LOCK_ID = 7_310_001  # arbitrary; only has to be unique among this database's lock users
 
 Connection = psycopg.Connection[tuple[object, ...]]
 
@@ -74,3 +74,20 @@ def replace_source(
                     for ordinal, (text, vector) in enumerate(zip(chunks, embeddings, strict=True))
                 ],
             )
+
+
+def embedding_models(connection: Connection) -> set[str]:
+    rows = connection.execute("SELECT DISTINCT embedding_model FROM chunks").fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def delete_sources_except(
+    connection: Connection, source_types: frozenset[str], keep_keys: set[str] | frozenset[str]
+) -> int:
+    """Removes sources of these types that the latest complete load no longer contains."""
+    with connection.transaction():
+        cursor = connection.execute(
+            "DELETE FROM sources WHERE source_type = ANY(%s) AND NOT (source_key = ANY(%s))",
+            (list(source_types), list(keep_keys)),
+        )
+        return cursor.rowcount

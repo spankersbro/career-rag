@@ -18,19 +18,22 @@ def parse_skills_csv(path: Path) -> list[Document]:
         return [_skill_document(row) for row in reader]
 
 
-def _skill_document(row: dict[str, str]) -> Document:
-    label = row["preferredLabel"].strip()
-    parts = [label]
-    if row["description"].strip():
-        parts.append(row["description"].strip())
-    alternatives = [alt.strip() for alt in row["altLabels"].splitlines() if alt.strip()]
+def _skill_document(row: dict[str, str | None]) -> Document:
+    uri = (row["conceptUri"] or "").strip()
+    label = (row["preferredLabel"] or "").strip()
+    if not uri or not label:
+        raise ValueError(f"ESCO row without conceptUri or preferredLabel: {uri or label!r}")
+    description = (row["description"] or "").strip()
+    parts = [label] + ([description] if description else [])
+    alt_labels = row["altLabels"] or ""
+    alternatives = [alt.strip() for alt in alt_labels.splitlines() if alt.strip()]
     if alternatives:
         parts.append("Also known as: " + "; ".join(alternatives))
     return Document(
         collection="esco",
         source_type="esco_skill",
-        source_key=row["conceptUri"],
+        source_key=uri,
         title=label,
         text="\n\n".join(parts),
-        url=row["conceptUri"],
+        url=uri,
     )

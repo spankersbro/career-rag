@@ -50,3 +50,9 @@ def test_missing_columns_are_rejected(tmp_path: Path) -> None:
     path.write_text("name,value\na,b\n", encoding="utf-8")
     with pytest.raises(ValueError, match="conceptUri"):
         parse_skills_csv(path)
+
+
+def test_short_row_without_label_is_rejected(tmp_path: Path) -> None:
+    path = write_csv(tmp_path, "KnowledgeSkillCompetence,http://data.europa.eu/esco/skill/3\n")
+    with pytest.raises(ValueError, match="preferredLabel"):
+        parse_skills_csv(path)

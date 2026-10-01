@@ -45,3 +45,19 @@ def test_text_without_entries_gives_nothing() -> None:
 def test_malformed_date_is_rejected() -> None:
     with pytest.raises(ValueError, match="2026-13-01"):
         parse_changelog("## 2026-13-01 — Broken\n\nText.\n")
+
+
+def test_source_keys_hold_no_title_text() -> None:
+    for document in parse_changelog(CHANGELOG):
+        assert document.title not in document.source_key
+        assert "Acme" not in document.source_key
+
+
+def test_new_entry_on_top_keeps_the_keys_below() -> None:
+    before = [d.source_key for d in parse_changelog(CHANGELOG)]
+    newer = CHANGELOG.replace(
+        "## 2026-03-02", "## 2026-03-01 — Initech: saved\n\nSaved.\n\n## 2026-03-02", 1
+    )
+    after = [d.source_key for d in parse_changelog(newer)]
+    assert set(before) <= set(after)
+    assert len(after) == len(before) + 1

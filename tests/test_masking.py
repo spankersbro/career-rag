@@ -50,3 +50,18 @@ def test_people_file_skips_blanks_and_comments(tmp_path: Path) -> None:
 
 def test_missing_people_file_means_no_names(tmp_path: Path) -> None:
     assert load_people(tmp_path / "absent.txt") == []
+
+
+def test_masks_national_phone_numbers() -> None:
+    masker = Masker([])
+    assert masker.mask("mobile 0660 1234567 or 01/523 82 07") == "mobile [phone] or [phone]"
+
+
+def test_national_phone_pattern_leaves_dates_versions_and_money_alone() -> None:
+    masker = Masker([])
+    text = "on 01.10.2026, v0.142.2, band 5,200-5,700, 2026-09-30, 14 days"
+    assert masker.mask(text) == text
+
+
+def test_long_digit_runs_starting_with_zero_are_masked_on_purpose() -> None:
+    assert Masker([]).mask("06601234567") == "[phone]"

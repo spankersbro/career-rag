@@ -1,8 +1,21 @@
+import json
+import threading
+import urllib.parse
+import urllib.request
 from datetime import date
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from crag.loaders.youtrack import attachment_path, issue_documents, pdf_text
+from crag.loaders.youtrack import (
+    PAGE_SIZE,
+    RefuseRedirects,
+    YouTrackClient,
+    attachment_path,
+    issue_documents,
+    pdf_attachments,
+    pdf_text,
+)
 
 BASE_URL = "https://tracker.example.com"
 
@@ -111,3 +124,143 @@ def test_pdf_text_extracts_page_text() -> None:
 def test_pdf_text_rejects_non_pdf_bytes() -> None:
     with pytest.raises(ValueError, match="PDF"):
         pdf_text(b"not a pdf")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://tracker.example.com/api/files/%2e%2e/admin/users",
+        "https://tracker.example.com:8443/api/files/12-10",
+    ],
+)
+def test_attachment_path_rejects_encoded_traversal_and_other_ports(url: str) -> None:
+    with pytest.raises(ValueError, match="attachment URL"):
+        attachment_path(url, BASE_URL)
+
+
+def test_attachment_path_honours_a_context_path() -> None:
+    base = "https://tracker.example.com/youtrack"
+    url = "https://tracker.example.com/youtrack/api/files/12-10?sign=a"
+    assert attachment_path(url, base) == "/youtrack/api/files/12-10?sign=a"
+    with pytest.raises(ValueError, match="attachment URL"):
+        attachment_path("https://tracker.example.com/api/files/12-10", base)
+
+
+def test_malformed_comments_and_attachments_are_dropped() -> None:
+    issue = {
+        **ISSUE,
+        "comments": [{"text": "no id"}, "not a dict", {"id": "4-3", "text": "kept"}],
+        "attachments": [{"id": "9-1"}, {"id": "9-2", "name": "cv.pdf"}],
+    }
+    documents = issue_documents(issue, BASE_URL, {"9-1": "orphan", "9-2": "CV text"})
+    assert [d.source_key for d in documents] == [
+        "TRACK-7",
+        "TRACK-7#comment-4-3",
+        "TRACK-7#attachment-9-2",
+    ]
+
+
+def test_non_numeric_timestamp_is_rejected() -> None:
+    with pytest.raises(ValueError, match="TRACK-7: timestamp"):
+        issue_documents({**ISSUE, "created": "2026-03-01"}, BASE_URL, {})
+
+
+def test_only_complete_pdf_attachments_are_downloaded() -> None:
+    issue = {
+        "attachments": [
+            {"id": "9-1", "name": "a.pdf", "url": "/api/files/9-1", "mimeType": "application/pdf"},
+            {"id": "9-2", "name": "b.png", "url": "/api/files/9-2", "mimeType": "image/png"},
+            {"id": "9-3", "name": "c.pdf", "mimeType": "application/pdf"},
+        ]
+    }
+    assert [a["id"] for a in pdf_attachments(issue)] == ["9-1"]
+
+
+class FakeResponse:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body
+
+
+class FakeOpener:
+    def __init__(self, bodies: list[bytes]) -> None:
+        self.bodies = bodies
+        self.requests: list[urllib.request.Request] = []
+
+    def open(self, request: urllib.request.Request, timeout: float) -> FakeResponse:
+        self.requests.append(request)
+        return FakeResponse(self.bodies.pop(0))
+
+
+def test_issues_are_paged_until_a_short_page() -> None:
+    full_page = json.dumps([{"idReadable": f"T-{i}"} for i in range(PAGE_SIZE)]).encode()
+    opener = FakeOpener([full_page, json.dumps([{"idReadable": "T-last"}]).encode()])
+    client = YouTrackClient(BASE_URL, "secret", opener)
+    issues = client.issues("project: T")
+    assert len(issues) == PAGE_SIZE + 1
+    skips = [
+        urllib.parse.parse_qs(urllib.parse.urlparse(r.full_url).query)["$skip"]
+        for r in opener.requests
+    ]
+    assert skips == [["0"], [str(PAGE_SIZE)]]
+    assert opener.requests[0].get_header("Authorization") == "Bearer secret"
+
+
+def test_issues_must_be_a_list() -> None:
+    client = YouTrackClient(BASE_URL, "secret", FakeOpener([b'{"error": "denied"}']))
+    with pytest.raises(ValueError, match="list of issues"):
+        client.issues("project: T")
+
+
+def test_attachment_download_uses_the_checked_path() -> None:
+    opener = FakeOpener([b"%PDF"])
+    client = YouTrackClient("https://tracker.example.com/youtrack", "secret", opener)
+    assert client.attachment("https://tracker.example.com/youtrack/api/files/9-1?sign=a") == b"%PDF"
+    assert (
+        opener.requests[0].full_url == "https://tracker.example.com/youtrack/api/files/9-1?sign=a"
+    )
+
+
+def test_base_url_must_be_https() -> None:
+    with pytest.raises(ValueError, match="https"):
+        YouTrackClient("http://tracker.example.com", "secret")
+
+
+class Redirecting(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(302)
+        self.send_header("Location", "http://127.0.0.1:9/steal")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        return None
+
+
+def test_redirects_are_refused_so_the_token_is_never_forwarded() -> None:
+    server = HTTPServer(("127.0.0.1", 0), Redirecting)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        opener = urllib.request.build_opener(RefuseRedirects)
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/api/files/1",
+            headers={"Authorization": "Bearer secret"},
+        )
+        with pytest.raises(ValueError, match="redirect"):
+            opener.open(request, timeout=5)
+    finally:
+        server.shutdown()
+
+
+def test_default_client_refuses_redirects() -> None:
+    client = YouTrackClient(BASE_URL, "secret")
+    handlers = getattr(client._opener, "handlers", [])
+    assert any(isinstance(handler, RefuseRedirects) for handler in handlers)

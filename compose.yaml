@@ -1,6 +1,6 @@
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:0.8.1-pg17
     environment:
       POSTGRES_USER: crag
       POSTGRES_PASSWORD: crag
@@ -15,14 +15,5 @@ services:
       timeout: 3s
       retries: 30
 
-  ollama:
-    profiles: ["llm"]
-    image: ollama/ollama:0.6.8
-    ports:
-      - "127.0.0.1:11434:11434"
-    volumes:
-      - ollama-models:/root/.ollama
-
 volumes:
   db-data:
-  ollama-models:
