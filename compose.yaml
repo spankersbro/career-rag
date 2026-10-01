@@ -1,0 +1,28 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: crag
+      POSTGRES_PASSWORD: crag
+      POSTGRES_DB: crag
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crag"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  ollama:
+    profiles: ["llm"]
+    image: ollama/ollama:0.6.8
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+
+volumes:
+  db-data:
+  ollama-models:
