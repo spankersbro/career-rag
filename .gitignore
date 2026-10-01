@@ -1,0 +1,17 @@
+# Private corpus and derived data never leave this machine
+data/
+*.sqlite
+*.dump
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
