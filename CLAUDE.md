@@ -4,6 +4,12 @@
 @../../dev-standards/GATES.md. Issues live in YouTrack project **CRAG** (`youtrack` MCP server).
 Commit subjects: `type: CRAG-123 - description`. Decisions: `docs/decisions/`.
 
+**GitHub account: `spankersbro` only.** Commits, pushes, `gh` calls, issues and PRs all use it,
+never any other account. The repo-local git config pins the author identity and a credential
+helper that always takes the `spankersbro` token, whatever `gh` account is active. For `gh`
+commands, set `GH_TOKEN="$(gh auth token --user spankersbro)"`. Do not change the local git
+config.
+
 **What this is.** A RAG system over a personal job-search archive plus the public ESCO skills
 catalogue. It matches a posting against evidence from past applications, flags gaps that were
 never claimed, and checks salary bands against a floor. See ADR 0001.
