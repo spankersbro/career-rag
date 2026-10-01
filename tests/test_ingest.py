@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import date
+from http.client import IncompleteRead
 from pathlib import Path
 
 import psycopg
@@ -161,7 +162,7 @@ def test_cli_ingests_a_changelog_file(
     monkeypatch.setenv("CRAG__PII__PEOPLE_FILE", str(people))
     monkeypatch.setenv("CRAG__EMBEDDING__MODEL", "hash-test")
 
-    assert main(["changelog", str(changelog)]) == 0
+    assert main(["changelog", str(changelog), "--label", "cv"]) == 0
 
     with connect(database_url, schema=schema) as connection:
         assert rows(
@@ -203,14 +204,20 @@ def test_batch_removes_sources_missing_from_a_complete_load(
 def test_batch_keeps_unavailable_sources_and_other_types(
     conn: psycopg.Connection[tuple[object, ...]],
 ) -> None:
-    attachment = replace(
-        private_document("TRACK-7#attachment-9-1", "cv"), source_type="issue_attachment"
+    def attachment(key: str) -> Document:
+        return replace(private_document(key, "cv"), source_type="issue_attachment")
+
+    changelog = replace(
+        private_document("changelog:cv:2026-03-01:0", "log"), source_type="changelog"
     )
-    changelog = replace(private_document("changelog:2026-03-01:0", "log"), source_type="changelog")
-    ingest(conn, [attachment, changelog], HashEmbedder(), Masker([]))
-    batch = Batch([], frozenset({"issue_attachment"}), frozenset({"TRACK-7#attachment-9-1"}))
+    ingest(conn, [attachment("TRACK-7#attachment-9-1"), changelog], HashEmbedder(), Masker([]))
+    batch = Batch(
+        [attachment("TRACK-8#attachment-9-2")],
+        frozenset({"issue_attachment"}),
+        frozenset({"TRACK-7#attachment-9-1"}),
+    )
     assert ingest_batch(conn, batch, HashEmbedder(), Masker([])).removed == 0
-    assert rows(conn, "SELECT count(*) FROM sources") == [(2,)]
+    assert rows(conn, "SELECT count(*) FROM sources") == [(3,)]
 
 
 def test_document_that_became_blank_is_removed(
@@ -291,7 +298,7 @@ def test_cli_refuses_private_sources_without_a_people_file(
     monkeypatch.setenv("CRAG__PII__PEOPLE_FILE", str(tmp_path / "absent.txt"))
     monkeypatch.setenv("CRAG__EMBEDDING__MODEL", "hash-test")
     with pytest.raises(ValueError, match="people file"):
-        main(["changelog", str(changelog)])
+        main(["changelog", str(changelog), "--label", "cv"])
 
 
 def test_cli_ingests_esco_without_a_people_file(
@@ -311,3 +318,57 @@ def test_cli_ingests_esco_without_a_people_file(
         assert rows(
             connection, "SELECT collection, text FROM chunks JOIN sources s ON s.id = source_id"
         ) == [("esco", "use databases\n\nManage data.")]
+
+
+def test_empty_load_never_prunes(conn: psycopg.Connection[tuple[object, ...]]) -> None:
+    types = frozenset({"issue"})
+    ingest_batch(conn, Batch([private_document("TRACK-7", "a")], types), HashEmbedder(), Masker([]))
+    with pytest.raises(ValueError, match="empty"):
+        ingest_batch(conn, Batch([], types), HashEmbedder(), Masker([]))
+    assert rows(conn, "SELECT source_key FROM sources") == [("TRACK-7",)]
+
+
+def test_load_that_would_remove_most_sources_is_refused(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    types = frozenset({"issue"})
+    everything = [private_document(f"TRACK-{n}", "text") for n in range(4)]
+    ingest_batch(conn, Batch(everything, types), HashEmbedder(), Masker([]))
+    with pytest.raises(ValueError, match="3 of 4"):
+        ingest_batch(conn, Batch(everything[:1], types), HashEmbedder(), Masker([]))
+    assert rows(conn, "SELECT count(*) FROM sources") == [(4,)]
+
+
+def test_prune_is_limited_to_the_key_prefix(conn: psycopg.Connection[tuple[object, ...]]) -> None:
+    types = frozenset({"changelog"})
+
+    def entry(key: str) -> Document:
+        return replace(private_document(key, "log"), source_type="changelog")
+
+    ingest(conn, [entry("changelog:site:2026-03-01:0")], HashEmbedder(), Masker([]))
+    batch = Batch([entry("changelog:cv:2026-03-01:0")], types, key_prefix="changelog:cv:")
+    assert ingest_batch(conn, batch, HashEmbedder(), Masker([])).removed == 0
+    assert rows(conn, "SELECT count(*) FROM sources") == [(2,)]
+
+
+@pytest.mark.parametrize("error", [TimeoutError("read timed out"), IncompleteRead(b"")])
+def test_network_failures_on_one_attachment_are_skipped(error: Exception) -> None:
+    class FailingClient(FakeClient):
+        def attachment(self, url: str) -> bytes:
+            raise error
+
+    issue: dict[str, object] = {
+        "idReadable": "TRACK-7",
+        "attachments": [
+            {"id": "9-1", "name": "a.pdf", "url": "/api/files/9-1", "mimeType": "application/pdf"}
+        ],
+    }
+    batch = youtrack_batch(FailingClient([issue], {}), "q")  # type: ignore[arg-type]
+    assert batch.unavailable_keys == {"TRACK-7#attachment-9-1"}
+
+
+def test_masker_from_file_requires_the_file(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="people file"):
+        Masker.from_file(tmp_path / "absent.txt")
+    (tmp_path / "people.txt").write_text("Jane Roe\n", encoding="utf-8")
+    assert Masker.from_file(tmp_path / "people.txt").mask("Jane Roe") == "[person]"

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from crag.masking import Masker, load_people
 
 AT = "@"
@@ -65,3 +67,8 @@ def test_national_phone_pattern_leaves_dates_versions_and_money_alone() -> None:
 
 def test_long_digit_runs_starting_with_zero_are_masked_on_purpose() -> None:
     assert Masker([]).mask("06601234567") == "[phone]"
+
+
+@pytest.mark.parametrize("text", ["01/10/2026", "05-03-2026", "1/9/26", "09 30 45", "at 09 30"])
+def test_dates_and_times_are_not_phone_numbers(text: str) -> None:
+    assert Masker([]).mask(text) == text

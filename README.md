@@ -26,7 +26,7 @@ cp .env.example .env            # fill in the tracker URL, token and query; neve
 docker compose up -d db
 set -a; . ./.env; set +a
 uv run python -m crag.ingest youtrack              # issues, comments, PDF attachments
-uv run python -m crag.ingest changelog path/to/CHANGELOG.md
+uv run python -m crag.ingest changelog path/to/CHANGELOG.md --label cv
 uv run python -m crag.ingest esco path/to/skills_en.csv
 ```
 

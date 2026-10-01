@@ -81,13 +81,38 @@ def embedding_models(connection: Connection) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
-def delete_sources_except(
-    connection: Connection, source_types: frozenset[str], keep_keys: set[str] | frozenset[str]
+def stale_sources(
+    connection: Connection,
+    source_types: frozenset[str],
+    key_prefix: str,
+    keep_keys: frozenset[str],
+) -> tuple[int, int]:
+    """Counts (stale, total) sources in scope: these types, keys under this prefix."""
+    row = connection.execute(
+        """
+        SELECT count(*) FILTER (WHERE NOT (source_key = ANY(%s))), count(*)
+        FROM sources WHERE source_type = ANY(%s) AND starts_with(source_key, %s)
+        """,
+        (list(keep_keys), list(source_types), key_prefix),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("count query returned no row")
+    return int(str(row[0])), int(str(row[1]))
+
+
+def delete_stale_sources(
+    connection: Connection,
+    source_types: frozenset[str],
+    key_prefix: str,
+    keep_keys: frozenset[str],
 ) -> int:
-    """Removes sources of these types that the latest complete load no longer contains."""
     with connection.transaction():
         cursor = connection.execute(
-            "DELETE FROM sources WHERE source_type = ANY(%s) AND NOT (source_key = ANY(%s))",
-            (list(source_types), list(keep_keys)),
+            """
+            DELETE FROM sources
+            WHERE source_type = ANY(%s) AND starts_with(source_key, %s)
+              AND NOT (source_key = ANY(%s))
+            """,
+            (list(source_types), key_prefix, list(keep_keys)),
         )
         return cursor.rowcount
