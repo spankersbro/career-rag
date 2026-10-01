@@ -372,3 +372,48 @@ def test_masker_from_file_requires_the_file(tmp_path: Path) -> None:
         Masker.from_file(tmp_path / "absent.txt")
     (tmp_path / "people.txt").write_text("Jane Roe\n", encoding="utf-8")
     assert Masker.from_file(tmp_path / "people.txt").mask("Jane Roe") == "[person]"
+
+
+def test_mass_removal_guard_counts_blank_documents_as_removed(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    types = frozenset({"issue"})
+    everything = [private_document(f"TRACK-{n}", "text") for n in range(4)]
+    ingest_batch(conn, Batch(everything, types), HashEmbedder(), Masker([]))
+    blanked = [private_document(f"TRACK-{n}", " ") for n in range(3)] + everything[3:]
+    with pytest.raises(ValueError, match="3 of 4"):
+        ingest_batch(conn, Batch(blanked, types), HashEmbedder(), Masker([]))
+    assert rows(conn, "SELECT count(*) FROM sources") == [(4,)]
+
+
+def test_allow_mass_removal_overrides_both_guards(
+    conn: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    types = frozenset({"issue"})
+    ingest_batch(conn, Batch([private_document("TRACK-7", "a")], types), HashEmbedder(), Masker([]))
+    result = ingest_batch(
+        conn, Batch([], types, allow_mass_removal=True), HashEmbedder(), Masker([])
+    )
+    assert result.removed == 1
+
+
+def test_cli_flag_allows_mass_removal(
+    database_url: str, schema: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    people = tmp_path / "people.txt"
+    people.write_text("", encoding="utf-8")
+    monkeypatch.setenv("CRAG__DATABASE__SCHEMA", schema)
+    monkeypatch.setenv("CRAG__PII__PEOPLE_FILE", str(people))
+    monkeypatch.setenv("CRAG__EMBEDDING__MODEL", "hash-test")
+    full = tmp_path / "full.md"
+    full.write_text(
+        "".join(f"## 2026-03-0{n} — Entry {n}\n\nText.\n\n" for n in range(1, 5)), encoding="utf-8"
+    )
+    short = tmp_path / "short.md"
+    short.write_text("## 2026-03-01 — Entry 1\n\nText.\n", encoding="utf-8")
+    assert main(["changelog", str(full), "--label", "cv"]) == 0
+    with pytest.raises(ValueError, match="3 of 4"):
+        main(["changelog", str(short), "--label", "cv"])
+    assert main(["--allow-mass-removal", "changelog", str(short), "--label", "cv"]) == 0
+    with connect(database_url, schema=schema) as connection:
+        assert rows(connection, "SELECT count(*) FROM sources") == [(1,)]

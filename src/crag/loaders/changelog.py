@@ -6,6 +6,7 @@ from crag.documents import Document
 
 ENTRY_HEADING = re.compile(r"^## (\d{4}-\d{2}-\d{2}) — (.+)$", re.MULTILINE)
 ISSUE_KEY = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+LABEL = re.compile(r"[a-z0-9-]+")
 
 
 def parse_changelog(markdown: str, label: str) -> list[Document]:
@@ -13,6 +14,7 @@ def parse_changelog(markdown: str, label: str) -> list[Document]:
 
     `label` names the changelog, so entries from different files never share a key.
     """
+    prefix = key_prefix(label)
     headings = list(ENTRY_HEADING.finditer(markdown))
     remaining_per_date = Counter(heading.group(1) for heading in headings)
     documents = []
@@ -21,13 +23,14 @@ def parse_changelog(markdown: str, label: str) -> list[Document]:
         remaining_per_date[heading.group(1)] -= 1
         sequence = remaining_per_date[heading.group(1)]
         body = markdown[heading.end() : end].strip()
-        documents.append(
-            _entry_document(heading, body, f"{key_prefix(label)}{heading.group(1)}:{sequence}")
-        )
+        documents.append(_entry_document(heading, body, f"{prefix}{heading.group(1)}:{sequence}"))
     return documents
 
 
 def key_prefix(label: str) -> str:
+    """Labels are short slugs: keys are not masked, and a ':' would widen the prune scope."""
+    if not LABEL.fullmatch(label):
+        raise ValueError(f"changelog label must match [a-z0-9-]+, got {label!r}")
     return f"changelog:{label}:"
 
 

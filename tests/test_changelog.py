@@ -68,3 +68,9 @@ def test_label_separates_changelog_files() -> None:
     second = {d.source_key for d in parse_changelog(CHANGELOG, label="site")}
     assert first.isdisjoint(second)
     assert all(key.startswith("changelog:cv:") for key in first)
+
+
+@pytest.mark.parametrize("label", ["", "cv:old", "Jane Roe", "CV", "cv/x"])
+def test_label_must_be_a_simple_slug(label: str) -> None:
+    with pytest.raises(ValueError, match="label"):
+        parse_changelog(CHANGELOG, label=label)

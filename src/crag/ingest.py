@@ -108,9 +108,11 @@ def ingest_batch(
     scope, is refused before anything is written: a wrong query or a revoked token must not
     wipe the index.
     """
-    if not batch.documents:
+    if not batch.documents and not batch.allow_mass_removal:
         raise ValueError("refusing an empty load; check the query, token or input file")
-    loaded_keys = frozenset(document.source_key for document in batch.documents)
+    loaded_keys = frozenset(
+        document.source_key for document in batch.documents if document.text.strip()
+    )
     stale, total = stale_sources(
         connection, batch.source_types, batch.key_prefix, loaded_keys | batch.unavailable_keys
     )
