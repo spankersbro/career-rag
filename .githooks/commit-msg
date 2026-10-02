@@ -1,0 +1,2 @@
+#!/bin/sh
+exec uv run --frozen --quiet python -m crag.guard message "$1"
