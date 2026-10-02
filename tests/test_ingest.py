@@ -2,9 +2,6 @@
 
 Each test gets its own schema."""
 
-import os
-import uuid
-from collections.abc import Iterator
 from dataclasses import replace
 from datetime import date
 from http.client import IncompleteRead
@@ -17,63 +14,18 @@ from crag.documents import Document
 from crag.embedding import HashEmbedder
 from crag.ingest import Batch, ingest, ingest_batch, main, youtrack_batch
 from crag.masking import Masker
-from crag.store import EMBEDDING_DIMENSION, connect, migrate
+from crag.store import EMBEDDING_DIMENSION, Connection, connect, migrate
+from tests.conftest import private_document, rows
 from tests.test_youtrack import minimal_pdf
 
 AT = "@"
-
-
-@pytest.fixture
-def database_url() -> str:
-    url = os.environ.get("CRAG__DATABASE__URL")
-    if not url:
-        pytest.fail(
-            "CRAG__DATABASE__URL is not set; start the database with `docker compose up -d db`"
-        )
-    return url
-
-
-@pytest.fixture
-def schema(database_url: str) -> Iterator[str]:
-    name = "test_" + uuid.uuid4().hex[:12]
-    with psycopg.connect(database_url, autocommit=True) as admin:
-        admin.execute("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
-        admin.execute(psycopg.sql.SQL("CREATE SCHEMA {}").format(psycopg.sql.Identifier(name)))
-    yield name
-    with psycopg.connect(database_url, autocommit=True) as admin:
-        admin.execute(
-            psycopg.sql.SQL("DROP SCHEMA {} CASCADE").format(psycopg.sql.Identifier(name))
-        )
-
-
-@pytest.fixture
-def conn(database_url: str, schema: str) -> Iterator[psycopg.Connection[tuple[object, ...]]]:
-    with connect(database_url, schema=schema) as connection:
-        migrate(connection)
-        yield connection
-
-
-def private_document(source_key: str, text: str) -> Document:
-    return Document(
-        collection="private",
-        source_type="issue",
-        source_key=source_key,
-        title=f"{source_key} Acme Corp — Platform Engineer",
-        text=text,
-        issue_key=source_key,
-        document_date=date(2026, 3, 1),
-    )
-
-
-def rows(conn: psycopg.Connection[tuple[object, ...]], query: str) -> list[tuple[object, ...]]:
-    return conn.execute(query).fetchall()
 
 
 def test_ingest_stores_masked_chunks_with_embeddings(
     conn: psycopg.Connection[tuple[object, ...]],
 ) -> None:
     document = private_document(
-        "TRACK-7", "Contact Jane Roe at jane" + AT + "mailbox.test.\n\nRejected: no RAG."
+        "TRACK-7", "Contact Jane Roe at jane" + AT + "mailbox.test.\n\nDeclined: no Quuxdb."
     )
     result = ingest(conn, [document], HashEmbedder(), Masker(["Jane Roe"]), max_chars=40)
 
@@ -86,7 +38,7 @@ def test_ingest_stores_masked_chunks_with_embeddings(
     )
     assert stored == [
         (0, "Contact [person] at [email].", "hash-test", "TRACK-7"),
-        (1, "Rejected: no RAG.", "hash-test", "TRACK-7"),
+        (1, "Declined: no Quuxdb.", "hash-test", "TRACK-7"),
     ]
 
 
@@ -417,3 +369,20 @@ def test_cli_flag_allows_mass_removal(
     assert main(["--allow-mass-removal", "changelog", str(short), "--label", "cv"]) == 0
     with connect(database_url, schema=schema) as connection:
         assert rows(connection, "SELECT count(*) FROM sources") == [(1,)]
+
+
+def test_every_stored_chunk_fits_the_window_with_its_title(conn: Connection) -> None:
+    embedder = HashEmbedder(max_words=12)
+    text = " ".join(f"word{n}" for n in range(40)) + ". Short end."
+    document = private_document("TRACK-7", text, title="TRACK-7 Acme Corp")
+    ingest(conn, [document], embedder, Masker([]))
+    stored = [str(text) for (text,) in rows(conn, "SELECT text FROM chunks ORDER BY ordinal")]
+    assert len(stored) > 1
+    assert all(embedder.fits(f"TRACK-7 Acme Corp\n\n{chunk}") for chunk in stored)
+    assert " ".join(stored).split() == text.split()
+
+
+def test_title_longer_than_the_window_is_rejected(conn: Connection) -> None:
+    document = private_document("TRACK-7", "body", title="one two three four five six")
+    with pytest.raises(ValueError, match="title alone"):
+        ingest(conn, [document], HashEmbedder(max_words=3), Masker([]))

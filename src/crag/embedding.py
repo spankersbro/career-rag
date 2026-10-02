@@ -1,9 +1,11 @@
+import gc
 import hashlib
 import math
 import re
 from typing import Protocol
 
 from fastembed import TextEmbedding
+from tokenizers import Tokenizer
 
 WORD = re.compile(r"\w+")
 
@@ -13,20 +15,52 @@ class Embedder(Protocol):
     dimension: int
     local: bool
 
+    def fits(self, text: str) -> bool: ...
+
     def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+    def close(self) -> None: ...
 
 
 class FastEmbedder:
-    """Runs the model on this machine, so private text never leaves it."""
+    """Runs the model on this machine, so private text never leaves it.
+
+    The model reads a fixed number of tokens and silently drops the rest, so `embed` refuses
+    text that does not fit; chunking uses `fits` to stay inside the window.
+    """
 
     local = True
 
     def __init__(self, model: str, cache_dir: str) -> None:
         self.name = model
         self._model = TextEmbedding(model_name=model, cache_dir=cache_dir)
+        model_tokenizer = self._model.model.tokenizer  # type: ignore[attr-defined]
+        self.max_tokens: int = model_tokenizer.truncation["max_length"]
+        self._tokenizer = Tokenizer.from_str(model_tokenizer.to_str())
+        self._tokenizer.no_truncation()
+        self._tokenizer.no_padding()
         self.dimension = len(next(iter(self._model.embed(["dimension probe"]))))
 
+    def token_count(self, text: str) -> int:
+        return len(self._tokenizer.encode(text).ids)
+
+    def fits(self, text: str) -> bool:
+        return self.token_count(text) <= self.max_tokens
+
+    def close(self) -> None:
+        """Releases the ONNX session. One still alive at interpreter exit, with other threads
+        running, can abort the process on macOS (seen with uvicorn and test servers)."""
+        self._model = None  # type: ignore[assignment]
+        gc.collect()
+
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if self._model is None:
+            raise RuntimeError("embedder is closed")
+        too_long = [text[:60] for text in texts if not self.fits(text)]
+        if too_long:
+            raise ValueError(
+                f"{len(too_long)} text(s) exceed the {self.max_tokens}-token window of {self.name}"
+            )
         return [vector.tolist() for vector in self._model.embed(texts)]
 
 
@@ -35,11 +69,22 @@ class HashEmbedder:
 
     name = "hash-test"
 
-    def __init__(self, dimension: int = 384, local: bool = True) -> None:
+    def __init__(
+        self, dimension: int = 384, local: bool = True, max_words: int | None = None
+    ) -> None:
         self.dimension = dimension
         self.local = local
+        self.max_words = max_words
+
+    def fits(self, text: str) -> bool:
+        return self.max_words is None or len(WORD.findall(text)) <= self.max_words
+
+    def close(self) -> None:
+        return None
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if not all(self.fits(text) for text in texts):
+            raise ValueError(f"text exceeds the {self.max_words}-word window of {self.name}")
         return [self._embed_one(text) for text in texts]
 
     def _embed_one(self, text: str) -> list[float]:

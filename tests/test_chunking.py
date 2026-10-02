@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import pytest
 
 from crag.chunking import chunk_text
@@ -43,3 +45,24 @@ def test_blank_text_gives_no_chunks(text: str) -> None:
 def test_limit_must_be_positive() -> None:
     with pytest.raises(ValueError, match="max_chars"):
         chunk_text("text", max_chars=0)
+
+
+def word_budget(limit: int) -> Callable[[str], bool]:
+    return lambda piece: len(piece.split()) <= limit
+
+
+def test_fits_predicate_limits_chunks_below_max_chars() -> None:
+    text = "one two three four. five six seven eight.\n\nnine ten eleven twelve."
+    chunks = chunk_text(text, max_chars=1000, fits=word_budget(4))
+    assert chunks == ["one two three four.", "five six seven eight.", "nine ten eleven twelve."]
+
+
+def test_sentence_over_the_budget_is_split_at_words() -> None:
+    assert chunk_text("a b c d e f g", fits=word_budget(3)) == ["a b c", "d e f", "g"]
+
+
+def test_word_over_the_budget_is_cut_into_fitting_parts() -> None:
+    def short(piece: str) -> bool:
+        return len(piece) <= 4
+
+    assert chunk_text("abcdefghij", fits=short) == ["abcd", "efgh", "ij"]

@@ -18,6 +18,10 @@ def connect(url: str, schema: str | None = None) -> Connection:
     if schema:
         connection.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
     connection.execute("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
+    # When the planner scans the HNSW index first (large collections), the scan stops after
+    # hnsw.ef_search candidates (40 by default) and the collection filter can leave a page
+    # nearly empty. Iterative scanning keeps going until the LIMIT is met.
+    connection.execute("SET hnsw.iterative_scan = relaxed_order")
     connection.commit()
     register_vector(connection)
     return connection
@@ -67,10 +71,18 @@ def replace_source(
         connection.execute("DELETE FROM chunks WHERE source_id = %s", (source_id,))
         with connection.cursor() as cursor:
             cursor.executemany(
-                "INSERT INTO chunks (source_id, ordinal, text, embedding, embedding_model) "
-                "VALUES (%s, %s, %s, %s, %s)",
+                "INSERT INTO chunks "
+                "(source_id, ordinal, text, embedding, embedding_model, search_text) "
+                "VALUES (%s, %s, %s, %s, %s, to_tsvector('simple', %s))",
                 [
-                    (source_id, ordinal, text, np.array(vector, dtype=np.float32), embedding_model)
+                    (
+                        source_id,
+                        ordinal,
+                        text,
+                        np.array(vector, dtype=np.float32),
+                        embedding_model,
+                        f"{document.title}\n{text}",
+                    )
                     for ordinal, (text, vector) in enumerate(zip(chunks, embeddings, strict=True))
                 ],
             )
