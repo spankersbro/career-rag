@@ -1,0 +1,47 @@
+import math
+import os
+
+import pytest
+
+from crag.embedding import FastEmbedder, HashEmbedder, cosine
+
+
+def test_hash_embedder_is_deterministic_and_normalised() -> None:
+    embedder = HashEmbedder(dimension=16)
+    [first, second] = embedder.embed(["vector database", "vector database"])
+    assert first == second
+    assert len(first) == 16
+    assert math.isclose(sum(value * value for value in first), 1.0)
+
+
+def test_hash_embedder_ranks_shared_words_higher() -> None:
+    [query, related, unrelated] = HashEmbedder().embed(
+        ["rag gap", "rejected for rag gap", "salary band"]
+    )
+    assert cosine(query, related) > cosine(query, unrelated)
+
+
+def test_hash_embedder_handles_empty_text() -> None:
+    [vector] = HashEmbedder(dimension=8).embed([""])
+    assert vector == [0.0] * 8
+
+
+@pytest.mark.skipif(
+    not os.environ.get("CRAG__TEST__FASTEMBED"),
+    reason="downloads a 0.22 GB model; CI sets CRAG__TEST__FASTEMBED=1 with a model cache",
+)
+def test_local_multilingual_model_matches_across_languages() -> None:
+    embedder = FastEmbedder(
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        cache_dir=os.environ.get("CRAG__EMBEDDING__CACHE_DIR", "data/models"),
+    )
+    assert embedder.local
+    assert embedder.dimension == 384
+    [english, german, unrelated] = embedder.embed(
+        [
+            "experience with vector databases",
+            "Erfahrung mit Vektordatenbanken",
+            "company car and bonus",
+        ]
+    )
+    assert cosine(english, german) > cosine(english, unrelated)

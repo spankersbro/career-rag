@@ -33,9 +33,31 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
+    services:
+      db:
+        image: pgvector/pgvector:0.8.1-pg17
+        env:
+          POSTGRES_USER: crag
+          POSTGRES_PASSWORD: crag
+          POSTGRES_DB: crag
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U crag"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      CRAG__DATABASE__URL: postgresql://crag:crag@127.0.0.1:5433/crag
+      CRAG__TEST__FASTEMBED: "1"
+      CRAG__EMBEDDING__CACHE_DIR: data/models
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - uses: actions/cache@v4
+        with:
+          path: data/models
+          key: embedding-models-paraphrase-multilingual-MiniLM-L12-v2-${{ hashFiles('uv.lock') }}
       - run: uv sync --frozen
       - run: uv run ruff format --check .
       - run: uv run ruff check .
