@@ -13,6 +13,8 @@ class Settings:
     youtrack_base_url: str | None
     youtrack_token: str | None
     youtrack_query: str | None
+    llm_ollama_url: str | None
+    llm_model: str | None
 
 
 def load_settings(environ: dict[str, str] | None = None) -> Settings:
@@ -28,4 +30,6 @@ def load_settings(environ: dict[str, str] | None = None) -> Settings:
         youtrack_base_url=env.get("CRAG__YOUTRACK__BASE_URL") or None,
         youtrack_token=env.get("CRAG__YOUTRACK__TOKEN") or None,
         youtrack_query=env.get("CRAG__YOUTRACK__QUERY") or None,
+        llm_ollama_url=env.get("CRAG__LLM__OLLAMA_URL") or None,
+        llm_model=env.get("CRAG__LLM__MODEL") or None,
     )

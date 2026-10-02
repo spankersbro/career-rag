@@ -1,46 +1,80 @@
 import re
+from collections.abc import Callable
 
 DEFAULT_MAX_CHARS = 1200
 
 PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
+Fits = Callable[[str], bool]
 
-def chunk_text(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
-    """Packs whole paragraphs into chunks; splits a paragraph only when it alone is too long."""
+
+def chunk_text(
+    text: str, max_chars: int = DEFAULT_MAX_CHARS, fits: Fits | None = None
+) -> list[str]:
+    """Packs whole paragraphs into chunks; splits a paragraph only when it alone is too long.
+
+    A chunk is at most `max_chars` long and, when given, satisfies `fits` (for example the
+    embedding model's token window), splitting down to sentences, words and finally characters.
+    """
     if max_chars < 1:
         raise ValueError(f"max_chars must be positive, got {max_chars}")
+    accepts = _limit(max_chars, fits)
     pieces = [
         piece
         for paragraph in PARAGRAPH_BREAK.split(text.strip())
         if paragraph.strip()
-        for piece in _split_paragraph(paragraph.strip(), max_chars)
+        for piece in _split(paragraph.strip(), accepts)
     ]
-    return _pack(pieces, "\n\n", max_chars)
+    return _pack(pieces, "\n\n", accepts)
 
 
-def _split_paragraph(paragraph: str, max_chars: int) -> list[str]:
-    if len(paragraph) <= max_chars:
+def _limit(max_chars: int, fits: Fits | None) -> Fits:
+    if fits is None:
+        return lambda piece: len(piece) <= max_chars
+    return lambda piece: len(piece) <= max_chars and fits(piece)
+
+
+def _split(paragraph: str, accepts: Fits) -> list[str]:
+    if accepts(paragraph):
         return [paragraph]
     sentences = [
-        part for sentence in SENTENCE_END.split(paragraph) for part in _cut(sentence, max_chars)
+        part
+        for sentence in SENTENCE_END.split(paragraph)
+        for part in _split_sentence(sentence, accepts)
     ]
-    return _pack(sentences, " ", max_chars)
+    return _pack(sentences, " ", accepts)
 
 
-def _cut(sentence: str, max_chars: int) -> list[str]:
-    return [sentence[start : start + max_chars] for start in range(0, len(sentence), max_chars)]
+def _split_sentence(sentence: str, accepts: Fits) -> list[str]:
+    if accepts(sentence):
+        return [sentence]
+    words = [part for word in sentence.split() for part in _cut_word(word, accepts)]
+    return _pack(words, " ", accepts)
 
 
-def _pack(pieces: list[str], separator: str, max_chars: int) -> list[str]:
+def _cut_word(word: str, accepts: Fits) -> list[str]:
+    """Last resort for a single token-heavy string: the longest prefixes that still fit."""
+    parts = []
+    while word:
+        end = len(word)
+        while end > 1 and not accepts(word[:end]):
+            end -= 1
+        parts.append(word[:end])
+        word = word[end:]
+    return parts
+
+
+def _pack(pieces: list[str], separator: str, accepts: Fits) -> list[str]:
     chunks: list[str] = []
     current = ""
     for piece in pieces:
         candidate = current + separator + piece if current else piece
-        if len(candidate) <= max_chars:
+        if accepts(candidate):
             current = candidate
             continue
-        chunks.append(current)
+        if current:
+            chunks.append(current)
         current = piece
     if current:
         chunks.append(current)

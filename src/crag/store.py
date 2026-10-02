@@ -67,10 +67,18 @@ def replace_source(
         connection.execute("DELETE FROM chunks WHERE source_id = %s", (source_id,))
         with connection.cursor() as cursor:
             cursor.executemany(
-                "INSERT INTO chunks (source_id, ordinal, text, embedding, embedding_model) "
-                "VALUES (%s, %s, %s, %s, %s)",
+                "INSERT INTO chunks "
+                "(source_id, ordinal, text, embedding, embedding_model, search_text) "
+                "VALUES (%s, %s, %s, %s, %s, to_tsvector('simple', %s))",
                 [
-                    (source_id, ordinal, text, np.array(vector, dtype=np.float32), embedding_model)
+                    (
+                        source_id,
+                        ordinal,
+                        text,
+                        np.array(vector, dtype=np.float32),
+                        embedding_model,
+                        f"{document.title}\n{text}",
+                    )
                     for ordinal, (text, vector) in enumerate(zip(chunks, embeddings, strict=True))
                 ],
             )

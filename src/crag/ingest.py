@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from crag.chunking import DEFAULT_MAX_CHARS, chunk_text
+from crag.chunking import DEFAULT_MAX_CHARS, Fits, chunk_text
 from crag.config import Settings, load_settings
 from crag.documents import Document
 from crag.embedding import Embedder, FastEmbedder, HashEmbedder
@@ -84,7 +84,9 @@ def ingest(
                 f"{document.source_key}: private documents need a local embedding model"
             )
         prepared = _masked(document, masker) if document.collection == "private" else document
-        texts = chunk_text(prepared.text, max_chars)
+        if not embedder.fits(f"{prepared.title}\n\nx"):
+            raise ValueError(f"{document.source_key}: title alone exceeds the embedding window")
+        texts = chunk_text(prepared.text, max_chars, fits=_window(embedder, prepared.title))
         if not texts:
             continue
         embeddings = embedder.embed([f"{prepared.title}\n\n{text}" for text in texts])
@@ -127,6 +129,15 @@ def ingest_batch(
     return replace(result, removed=removed)
 
 
+def _window(embedder: Embedder, title: str) -> Fits:
+    """Each chunk is embedded with its title in front, so both must fit the model together."""
+
+    def fits(chunk: str) -> bool:
+        return embedder.fits(f"{title}\n\n{chunk}")
+
+    return fits
+
+
 def _masked(document: Document, masker: Masker) -> Document:
     return replace(document, title=masker.mask(document.title), text=masker.mask(document.text))
 
@@ -161,7 +172,7 @@ def _youtrack_client(settings: Settings) -> tuple[YouTrackClient, str]:
     ), settings.youtrack_query
 
 
-def _embedder(settings: Settings) -> Embedder:
+def embedder_from_settings(settings: Settings) -> Embedder:
     if settings.embedding_model == HashEmbedder.name:
         return HashEmbedder()
     return FastEmbedder(settings.embedding_model, settings.embedding_cache_dir)
@@ -207,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
 
     with connect(settings.database_url, schema=settings.database_schema) as connection:
         migrate(connection)
-        result = ingest_batch(connection, batch, _embedder(settings), masker)
+        result = ingest_batch(connection, batch, embedder_from_settings(settings), masker)
     log.info(
         json.dumps(
             {

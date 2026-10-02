@@ -45,3 +45,25 @@ def test_local_multilingual_model_matches_across_languages() -> None:
         ]
     )
     assert cosine(english, german) > cosine(english, unrelated)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("CRAG__TEST__FASTEMBED"),
+    reason="downloads a 0.22 GB model; CI sets CRAG__TEST__FASTEMBED=1 with a model cache",
+)
+def test_local_model_refuses_text_beyond_its_token_window() -> None:
+    embedder = FastEmbedder(
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        cache_dir=os.environ.get("CRAG__EMBEDDING__CACHE_DIR", "data/models"),
+    )
+    assert embedder.max_tokens == 128
+    assert embedder.fits("word " * 100)
+    assert not embedder.fits("word " * 200)
+    with pytest.raises(ValueError, match="128-token window"):
+        embedder.embed(["word " * 200])
+
+
+def test_hash_embedder_word_budget() -> None:
+    assert HashEmbedder(max_words=2).fits("one two")
+    assert not HashEmbedder(max_words=2).fits("one two three")
+    assert HashEmbedder().fits("word " * 10_000)
