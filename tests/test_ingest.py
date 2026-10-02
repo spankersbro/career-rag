@@ -25,7 +25,7 @@ def test_ingest_stores_masked_chunks_with_embeddings(
     conn: psycopg.Connection[tuple[object, ...]],
 ) -> None:
     document = private_document(
-        "TRACK-7", "Contact Jane Roe at jane" + AT + "mailbox.test.\n\nRejected: no RAG."
+        "TRACK-7", "Contact Jane Roe at jane" + AT + "mailbox.test.\n\nDeclined: no Quuxdb."
     )
     result = ingest(conn, [document], HashEmbedder(), Masker(["Jane Roe"]), max_chars=40)
 
@@ -38,7 +38,7 @@ def test_ingest_stores_masked_chunks_with_embeddings(
     )
     assert stored == [
         (0, "Contact [person] at [email].", "hash-test", "TRACK-7"),
-        (1, "Rejected: no RAG.", "hash-test", "TRACK-7"),
+        (1, "Declined: no Quuxdb.", "hash-test", "TRACK-7"),
     ]
 
 

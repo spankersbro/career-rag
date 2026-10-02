@@ -16,7 +16,7 @@ def test_hash_embedder_is_deterministic_and_normalised() -> None:
 
 def test_hash_embedder_ranks_shared_words_higher() -> None:
     [query, related, unrelated] = HashEmbedder().embed(
-        ["rag gap", "rejected for rag gap", "salary band"]
+        ["quuxdb gap", "declined for quuxdb gap", "weather report"]
     )
     assert cosine(query, related) > cosine(query, unrelated)
 
@@ -41,7 +41,7 @@ def test_local_multilingual_model_matches_across_languages() -> None:
         [
             "experience with vector databases",
             "Erfahrung mit Vektordatenbanken",
-            "company car and bonus",
+            "sunny weather today",
         ]
     )
     assert cosine(english, german) > cosine(english, unrelated)
@@ -67,3 +67,8 @@ def test_hash_embedder_word_budget() -> None:
     assert HashEmbedder(max_words=2).fits("one two")
     assert not HashEmbedder(max_words=2).fits("one two three")
     assert HashEmbedder().fits("word " * 10_000)
+
+
+def test_hash_embedder_refuses_text_beyond_its_window_like_the_real_model() -> None:
+    with pytest.raises(ValueError, match="2-word window"):
+        HashEmbedder(max_words=2).embed(["one two three"])

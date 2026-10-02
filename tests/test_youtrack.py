@@ -22,7 +22,7 @@ BASE_URL = "https://tracker.example.com"
 ISSUE = {
     "idReadable": "TRACK-7",
     "summary": "Acme Corp — Platform Engineer",
-    "description": "**Role:** Platform Engineer\n\n**Notes:** Band 5,000-6,000.",
+    "description": "**Role:** Platform Engineer\n\n**Notes:** Band A to B.",
     "created": 1790000000000,
     "customFields": [{"name": "State", "value": {"name": "Rejected"}}],
     "comments": [
@@ -44,7 +44,7 @@ def test_description_document_carries_key_state_and_url() -> None:
     assert description.document_date == date(2026, 9, 21)
     assert description.text == (
         "Acme Corp — Platform Engineer\n\nState: Rejected\n\n"
-        "**Role:** Platform Engineer\n\n**Notes:** Band 5,000-6,000."
+        "**Role:** Platform Engineer\n\n**Notes:** Band A to B."
     )
     assert comment.source_key == "TRACK-7#comment-4-1"
     assert comment.source_type == "issue_comment"

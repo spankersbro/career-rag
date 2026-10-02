@@ -1,7 +1,6 @@
 """Hybrid retrieval: vector similarity and IDF-weighted keyword matches, fused by rank."""
 
 import argparse
-import math
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -13,7 +12,7 @@ import numpy as np
 from crag.config import load_settings
 from crag.embedding import Embedder
 from crag.ingest import embedder_from_settings
-from crag.store import Connection, connect
+from crag.store import Connection, connect, embedding_models
 
 CollectionFilter = Literal["private", "esco", "all"]
 
@@ -51,13 +50,34 @@ def search(
     if not 1 <= limit <= MAX_LIMIT:
         raise ValueError(f"limit must be between 1 and {MAX_LIMIT}, got {limit}")
 
-    [query_vector] = embedder.embed([query])
+    [query_vector] = embedder.embed([query_for_embedding(query, embedder)])
     rankings = [
         _vector_ranking(connection, query_vector, collection),
         keyword_ranking(connection, keyword_terms(connection, query), collection),
     ]
     fused = fuse(rankings)[:limit]
     return _hits(connection, fused)
+
+
+def query_for_embedding(query: str, embedder: Embedder) -> str:
+    """The longest word prefix that fits the model; the keyword side still sees every word."""
+    fitted = ""
+    for word in query.split():
+        candidate = f"{fitted} {word}" if fitted else word
+        if not embedder.fits(candidate):
+            break
+        fitted = candidate
+    return fitted
+
+
+def check_index_model(connection: Connection, embedder: Embedder) -> None:
+    """Query vectors from another model than the index's give meaningless distances."""
+    other = embedding_models(connection) - {embedder.name}
+    if other:
+        raise ValueError(
+            f"index was built with {sorted(other)}, but queries use {embedder.name}; "
+            "set CRAG__EMBEDDING__MODEL to match or re-ingest"
+        )
 
 
 def keyword_terms(connection: Connection, query: str) -> list[str]:
@@ -86,64 +106,77 @@ def fuse(rankings: list[list[int]]) -> list[tuple[int, float]]:
 def _vector_ranking(
     connection: Connection, query_vector: list[float], collection: CollectionFilter
 ) -> list[int]:
-    rows = connection.execute(
-        """
-        SELECT c.id FROM chunks c JOIN sources s ON s.id = c.source_id
-        WHERE %(collection)s = 'all' OR s.collection = %(collection)s
-        ORDER BY c.embedding <=> %(vector)s, c.id
-        LIMIT %(candidates)s
-        """,
-        {
-            "collection": collection,
-            "vector": np.array(query_vector, dtype=np.float32),
-            "candidates": CANDIDATES_PER_RANKING,
-        },
-    ).fetchall()
+    """Nearest chunks, re-sorted after the index scan.
+
+    The connection enables pgvector's iterative HNSW scan, so a collection filter cannot leave
+    the page short; its relaxed ordering is why the outer query sorts again.
+    """
+    vector = np.array(query_vector, dtype=np.float32)
+    if collection == "all":
+        rows = connection.execute(
+            """
+            WITH nearest AS MATERIALIZED (
+                SELECT c.id, c.embedding <=> %(vector)s AS distance FROM chunks c
+                ORDER BY c.embedding <=> %(vector)s LIMIT %(candidates)s
+            )
+            SELECT id FROM nearest ORDER BY distance, id
+            """,
+            {"vector": vector, "candidates": CANDIDATES_PER_RANKING},
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """
+            WITH nearest AS MATERIALIZED (
+                SELECT c.id, c.embedding <=> %(vector)s AS distance
+                FROM chunks c JOIN sources s ON s.id = c.source_id
+                WHERE s.collection = %(collection)s
+                ORDER BY c.embedding <=> %(vector)s LIMIT %(candidates)s
+            )
+            SELECT id FROM nearest ORDER BY distance, id
+            """,
+            {"vector": vector, "collection": collection, "candidates": CANDIDATES_PER_RANKING},
+        ).fetchall()
     return [int(str(row[0])) for row in rows]
 
 
 def keyword_ranking(
     connection: Connection, terms: list[str], collection: CollectionFilter
 ) -> list[int]:
-    """Scores a chunk by the summed IDF of the query terms it contains.
+    """Scores a chunk by the summed IDF of the query terms it contains, within the collection.
 
     Postgres ranking functions have no IDF, so a chunk repeating a common word would beat one
-    containing the rare word the question is about.
+    containing the rare word the question is about. Every lookup goes through the GIN index:
+    the work grows with the chunks that match a term, not with the size of the table.
     """
     if not terms:
         return []
-    lexemes = [_lexeme_query(term) for term in terms]
-    total = _count(connection, "SELECT count(*) FROM chunks", ())
-    idfs = [
-        math.log(
-            1
-            + total
-            / max(
-                1,
-                _count(
-                    connection,
-                    "SELECT count(*) FROM chunks WHERE search_text @@ %s::tsquery",
-                    (lexeme,),
-                ),
-            )
-        )
-        for lexeme in lexemes
-    ]
     rows = connection.execute(
         """
-        SELECT c.id, sum(q.idf) AS score
-        FROM chunks c
+        WITH total AS MATERIALIZED (
+            SELECT count(*)::float8 AS n FROM chunks c JOIN sources s ON s.id = c.source_id
+            WHERE %(collection)s = 'all' OR s.collection = %(collection)s
+        ),
+        terms AS MATERIALIZED (
+            SELECT q.lexeme::tsquery AS query, matches.frequency
+            FROM unnest(%(lexemes)s::text[]) AS q(lexeme)
+            CROSS JOIN LATERAL (
+                SELECT count(*) AS frequency FROM chunks c JOIN sources s ON s.id = c.source_id
+                WHERE c.search_text @@ q.lexeme::tsquery
+                  AND (%(collection)s = 'all' OR s.collection = %(collection)s)
+            ) AS matches
+        )
+        SELECT c.id, sum(ln(1 + total.n / greatest(terms.frequency, 1))) AS score
+        FROM terms
+        JOIN chunks c ON c.search_text @@ terms.query
         JOIN sources s ON s.id = c.source_id
-        JOIN unnest(%(lexemes)s::text[], %(idfs)s::float8[]) AS q(lexeme, idf)
-          ON c.search_text @@ q.lexeme::tsquery
+        CROSS JOIN total
         WHERE %(collection)s = 'all' OR s.collection = %(collection)s
         GROUP BY c.id
         ORDER BY score DESC, c.id
         LIMIT %(candidates)s
         """,
         {
-            "lexemes": lexemes,
-            "idfs": idfs,
+            "lexemes": [_lexeme_query(term) for term in terms],
             "collection": collection,
             "candidates": CANDIDATES_PER_RANKING,
         },
@@ -154,11 +187,6 @@ def keyword_ranking(
 def _lexeme_query(term: str) -> str:
     """A tsquery that matches exactly this lexeme; quoting stops ':' or '&' being read as syntax."""
     return "'" + term.replace("\\", "\\\\").replace("'", "''") + "'"
-
-
-def _count(connection: Connection, query: str, params: tuple[str, ...]) -> int:
-    row = connection.execute(query, params).fetchone()
-    return int(str(row[0])) if row else 0
 
 
 def _hits(connection: Connection, fused: list[tuple[int, float]]) -> list[Hit]:
@@ -199,10 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
 
     settings = load_settings()
+    embedder = embedder_from_settings(settings)
     with connect(settings.database_url, schema=settings.database_schema) as connection:
+        check_index_model(connection, embedder)
         hits = search(
             connection,
-            embedder_from_settings(settings),
+            embedder,
             arguments.query,
             arguments.collection,
             arguments.limit,

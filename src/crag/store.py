@@ -18,6 +18,10 @@ def connect(url: str, schema: str | None = None) -> Connection:
     if schema:
         connection.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
     connection.execute("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
+    # When the planner scans the HNSW index first (large collections), the scan stops after
+    # hnsw.ef_search candidates (40 by default) and the collection filter can leave a page
+    # nearly empty. Iterative scanning keeps going until the LIMIT is met.
+    connection.execute("SET hnsw.iterative_scan = relaxed_order")
     connection.commit()
     register_vector(connection)
     return connection

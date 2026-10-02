@@ -25,10 +25,8 @@ def hit(number: int, text: str) -> Hit:
 
 
 def test_prompt_numbers_passages_and_restricts_the_answer_to_them() -> None:
-    prompt = build_prompt(
-        "Which roles failed?", [hit(24, "No RAG experience."), hit(9, "Too far.")]
-    )
-    assert "[1] TRACK-24 Acme Corp\nNo RAG experience." in prompt
+    prompt = build_prompt("Which roles failed?", [hit(24, "No Quuxdb skills."), hit(9, "Too far.")])
+    assert "[1] TRACK-24 Acme Corp\nNo Quuxdb skills." in prompt
     assert "[2] TRACK-9 Acme Corp\nToo far." in prompt
     assert "only the passages" in prompt
     assert prompt.rstrip().endswith("Question: Which roles failed?")
@@ -40,7 +38,6 @@ def test_prompt_numbers_passages_and_restricts_the_answer_to_them() -> None:
         "http://localhost:11434",
         "http://127.0.0.1:11434",
         "http://[::1]:11434",
-        "http://ollama:11434",
     ],
 )
 def test_local_llm_urls_are_accepted(url: str) -> None:
@@ -48,7 +45,14 @@ def test_local_llm_urls_are_accepted(url: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "url", ["https://api.example.com", "http://10.0.0.5:11434", "http://localhost.example.com", ""]
+    "url",
+    [
+        "https://api.example.com",
+        "http://10.0.0.5:11434",
+        "http://localhost.example.com",
+        "http://ollama:11434",
+        "",
+    ],
 )
 def test_remote_llm_urls_are_refused(url: str) -> None:
     with pytest.raises(ValueError, match="local"):
@@ -61,7 +65,7 @@ class FakeOllama(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         FakeOllama.received.append(body)
-        payload = json.dumps({"response": "TRACK-24 failed on RAG [1]."}).encode()
+        payload = json.dumps({"response": "TRACK-24 lacked Quuxdb [1]."}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -77,7 +81,7 @@ def test_ollama_client_sends_the_prompt_and_returns_the_answer() -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         client = OllamaClient(f"http://127.0.0.1:{server.server_port}", "test-model")
-        assert client.generate("prompt text") == "TRACK-24 failed on RAG [1]."
+        assert client.generate("prompt text") == "TRACK-24 lacked Quuxdb [1]."
         assert FakeOllama.received[-1] == {
             "model": "test-model",
             "prompt": "prompt text",
@@ -90,3 +94,17 @@ def test_ollama_client_sends_the_prompt_and_returns_the_answer() -> None:
 def test_ollama_client_refuses_a_remote_url() -> None:
     with pytest.raises(ValueError, match="local"):
         OllamaClient("https://api.example.com", "test-model")
+
+
+def test_ollama_client_ignores_proxy_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    server = HTTPServer(("127.0.0.1", 0), FakeOllama)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = OllamaClient(f"http://127.0.0.1:{server.server_port}", "test-model")
+        assert client.generate("prompt text") == "TRACK-24 lacked Quuxdb [1]."
+    finally:
+        server.shutdown()

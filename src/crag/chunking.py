@@ -57,12 +57,22 @@ def _cut_word(word: str, accepts: Fits) -> list[str]:
     """Last resort for a single token-heavy string: the longest prefixes that still fit."""
     parts = []
     while word:
-        end = len(word)
-        while end > 1 and not accepts(word[:end]):
-            end -= 1
+        end = _longest_fitting_prefix(word, accepts)
         parts.append(word[:end])
         word = word[end:]
     return parts
+
+
+def _longest_fitting_prefix(word: str, accepts: Fits) -> int:
+    """Binary search: tokenising every prefix length would be quadratic on long blobs."""
+    low, high = 1, len(word)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if accepts(word[:middle]):
+            low = middle
+        else:
+            high = middle - 1
+    return low
 
 
 def _pack(pieces: list[str], separator: str, accepts: Fits) -> list[str]:

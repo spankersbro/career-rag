@@ -69,6 +69,8 @@ class HashEmbedder:
         return self.max_words is None or len(WORD.findall(text)) <= self.max_words
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if not all(self.fits(text) for text in texts):
+            raise ValueError(f"text exceeds the {self.max_words}-word window of {self.name}")
         return [self._embed_one(text) for text in texts]
 
     def _embed_one(self, text: str) -> list[float]:

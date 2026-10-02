@@ -7,9 +7,7 @@ from typing import Protocol
 
 from crag.search import Hit
 
-LOCAL_HOSTS = frozenset(
-    {"localhost", "127.0.0.1", "::1", "ollama"}
-)  # "ollama": the Compose service
+LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 GENERATE_TIMEOUT_SECONDS = 120  # a 7B model on a laptop CPU can take a minute for a short answer
 
 
@@ -29,6 +27,9 @@ class OllamaClient:
     def __init__(self, base_url: str, model: str) -> None:
         self._base_url = require_local_url(base_url).rstrip("/")
         self._model = model
+        # No ProxyHandler entries: the default opener would send the prompt through
+        # http_proxy or the system proxy, past the local-URL check.
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def generate(self, prompt: str) -> str:
         request = urllib.request.Request(  # noqa: S310 - URL is checked to be local
@@ -37,7 +38,7 @@ class OllamaClient:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=GENERATE_TIMEOUT_SECONDS) as response:  # noqa: S310
+        with self._opener.open(request, timeout=GENERATE_TIMEOUT_SECONDS) as response:
             body = json.loads(response.read())
         answer = body.get("response") if isinstance(body, dict) else None
         if not isinstance(answer, str):
