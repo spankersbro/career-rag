@@ -4,9 +4,12 @@ Each test gets its own schema, so tests are independent and never touch a real i
 """
 
 import os
+import threading
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import psycopg
 import pytest
@@ -60,3 +63,21 @@ def private_document(source_key: str, text: str, title: str | None = None) -> Do
 
 def rows(conn: Connection, query: str) -> list[tuple[object, ...]]:
     return conn.execute(query).fetchall()
+
+
+@contextmanager
+def running_server(handler: type[BaseHTTPRequestHandler]) -> Iterator[HTTPServer]:
+    """A local HTTP server whose thread is joined and socket closed before the test ends.
+
+    A server thread still running at interpreter exit races onnxruntime's teardown on macOS
+    and can abort the whole test process.
+    """
+    server = HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

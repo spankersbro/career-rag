@@ -4,8 +4,8 @@ loopback and refuses requests addressed to any other host name (DNS rebinding)."
 import http.client
 import json
 import logging
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import asdict
 from typing import Annotated, Any
 
@@ -33,7 +33,12 @@ Question = Annotated[str, Query(min_length=1, max_length=MAX_QUERY_CHARS)]
 def create_app(
     connections: ConnectionFactory, embedder: Embedder, llm: LanguageModel | None
 ) -> FastAPI:
-    app = FastAPI(title="Career RAG")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        embedder.close()
+
+    app = FastAPI(title="Career RAG", lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(ALLOWED_HOSTS))
 
     @contextmanager

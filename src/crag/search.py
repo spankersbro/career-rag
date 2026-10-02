@@ -50,11 +50,11 @@ def search(
     if not 1 <= limit <= MAX_LIMIT:
         raise ValueError(f"limit must be between 1 and {MAX_LIMIT}, got {limit}")
 
-    [query_vector] = embedder.embed([query_for_embedding(query, embedder)])
-    rankings = [
-        _vector_ranking(connection, query_vector, collection),
-        keyword_ranking(connection, keyword_terms(connection, query), collection),
-    ]
+    rankings = [keyword_ranking(connection, keyword_terms(connection, query), collection)]
+    embeddable = query_for_embedding(query, embedder)
+    if embeddable:
+        [query_vector] = embedder.embed([embeddable])
+        rankings.append(_vector_ranking(connection, query_vector, collection))
     fused = fuse(rankings)[:limit]
     return _hits(connection, fused)
 
@@ -228,15 +228,18 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = load_settings()
     embedder = embedder_from_settings(settings)
-    with connect(settings.database_url, schema=settings.database_schema) as connection:
-        check_index_model(connection, embedder)
-        hits = search(
-            connection,
-            embedder,
-            arguments.query,
-            arguments.collection,
-            arguments.limit,
-        )
+    try:
+        with connect(settings.database_url, schema=settings.database_schema) as connection:
+            check_index_model(connection, embedder)
+            hits = search(
+                connection,
+                embedder,
+                arguments.query,
+                arguments.collection,
+                arguments.limit,
+            )
+    finally:
+        embedder.close()
     for number, hit in enumerate(hits, start=1):
         dated = f" ({hit.document_date.isoformat()})" if hit.document_date else ""
         print(f"{number}. {hit.title}{dated} — {hit.url or hit.source_key}")

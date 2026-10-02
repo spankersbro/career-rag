@@ -152,3 +152,23 @@ def test_database_down_gives_503() -> None:
     app = create_app(connections_to(None), HashEmbedder(), llm=None)
     with TestClient(app, base_url="http://127.0.0.1") as test_client:
         assert test_client.get("/search", params={"q": QUESTION}).status_code == 503
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8000", "localhost:8000", "[::1]:8000"])
+def test_loopback_hosts_with_ports_are_accepted(seeded: Connection, host: str) -> None:
+    app = create_app(connections_to(seeded), HashEmbedder(), llm=None)
+    with TestClient(app, base_url="http://127.0.0.1") as test_client:
+        response = test_client.get("/health", headers={"Host": host})
+    assert response.status_code == 200
+
+
+def test_shutdown_releases_the_embedder(seeded: Connection) -> None:
+    closed: list[bool] = []
+
+    class ClosingEmbedder(HashEmbedder):
+        def close(self) -> None:
+            closed.append(True)
+
+    with TestClient(create_app(connections_to(seeded), ClosingEmbedder(), llm=None)):
+        assert closed == []
+    assert closed == [True]

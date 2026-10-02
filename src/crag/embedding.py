@@ -1,3 +1,4 @@
+import gc
 import hashlib
 import math
 import re
@@ -17,6 +18,8 @@ class Embedder(Protocol):
     def fits(self, text: str) -> bool: ...
 
     def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+    def close(self) -> None: ...
 
 
 class FastEmbedder:
@@ -44,7 +47,15 @@ class FastEmbedder:
     def fits(self, text: str) -> bool:
         return self.token_count(text) <= self.max_tokens
 
+    def close(self) -> None:
+        """Releases the ONNX session. One still alive at interpreter exit, with other threads
+        running, can abort the process on macOS (seen with uvicorn and test servers)."""
+        self._model = None  # type: ignore[assignment]
+        gc.collect()
+
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if self._model is None:
+            raise RuntimeError("embedder is closed")
         too_long = [text[:60] for text in texts if not self.fits(text)]
         if too_long:
             raise ValueError(
@@ -67,6 +78,9 @@ class HashEmbedder:
 
     def fits(self, text: str) -> bool:
         return self.max_words is None or len(WORD.findall(text)) <= self.max_words
+
+    def close(self) -> None:
+        return None
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not all(self.fits(text) for text in texts):

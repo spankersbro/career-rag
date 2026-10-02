@@ -233,3 +233,20 @@ def test_keyword_ranking_scales_with_matches_not_rows_squared(conn: Connection) 
     assert len(ranking) == 50
     private = keyword_ranking(conn, ["lacked", "quuxdb", "roles"], "private")
     assert issue_key_of(conn, private[0]) == "TRACK-24"
+
+
+def test_query_whose_first_word_overflows_the_window_uses_keywords_only(conn: Connection) -> None:
+    seed(conn)
+
+    class RecordingEmbedder(HashEmbedder):
+        calls: list[list[str]] = []
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            self.calls.append(texts)
+            return super().embed(texts)
+
+    embedder = RecordingEmbedder(max_words=0)
+    assert query_for_embedding("Quuxdb skills", embedder) == ""
+    [hit, *_] = search(conn, embedder, "Quuxdb skills", collection="private")
+    assert hit.issue_key == "TRACK-24"
+    assert embedder.calls == []

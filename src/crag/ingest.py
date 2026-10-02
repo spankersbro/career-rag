@@ -216,9 +216,13 @@ def main(argv: list[str] | None = None) -> int:
             )
     batch = replace(batch, allow_mass_removal=arguments.allow_mass_removal)
 
-    with connect(settings.database_url, schema=settings.database_schema) as connection:
-        migrate(connection)
-        result = ingest_batch(connection, batch, embedder_from_settings(settings), masker)
+    embedder = embedder_from_settings(settings)
+    try:
+        with connect(settings.database_url, schema=settings.database_schema) as connection:
+            migrate(connection)
+            result = ingest_batch(connection, batch, embedder, masker)
+    finally:
+        embedder.close()
     log.info(
         json.dumps(
             {

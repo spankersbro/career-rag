@@ -1,13 +1,13 @@
 import json
-import threading
 from datetime import date
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import ClassVar
 
 import pytest
 
 from crag.answer import OllamaClient, build_prompt, require_local_url
 from crag.search import Hit
+from tests.conftest import running_server
 
 
 def hit(number: int, text: str) -> Hit:
@@ -77,9 +77,7 @@ class FakeOllama(BaseHTTPRequestHandler):
 
 
 def test_ollama_client_sends_the_prompt_and_returns_the_answer() -> None:
-    server = HTTPServer(("127.0.0.1", 0), FakeOllama)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
+    with running_server(FakeOllama) as server:
         client = OllamaClient(f"http://127.0.0.1:{server.server_port}", "test-model")
         assert client.generate("prompt text") == "TRACK-24 lacked Quuxdb [1]."
         assert FakeOllama.received[-1] == {
@@ -87,8 +85,6 @@ def test_ollama_client_sends_the_prompt_and_returns_the_answer() -> None:
             "prompt": "prompt text",
             "stream": False,
         }
-    finally:
-        server.shutdown()
 
 
 def test_ollama_client_refuses_a_remote_url() -> None:
@@ -101,10 +97,6 @@ def test_ollama_client_ignores_proxy_settings(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
     monkeypatch.delenv("no_proxy", raising=False)
     monkeypatch.delenv("NO_PROXY", raising=False)
-    server = HTTPServer(("127.0.0.1", 0), FakeOllama)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
+    with running_server(FakeOllama) as server:
         client = OllamaClient(f"http://127.0.0.1:{server.server_port}", "test-model")
         assert client.generate("prompt text") == "TRACK-24 lacked Quuxdb [1]."
-    finally:
-        server.shutdown()

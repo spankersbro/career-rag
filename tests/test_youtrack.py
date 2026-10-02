@@ -1,9 +1,8 @@
 import json
-import threading
 import urllib.parse
 import urllib.request
 from datetime import date
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import pytest
 
@@ -16,6 +15,7 @@ from crag.loaders.youtrack import (
     pdf_attachments,
     pdf_text,
 )
+from tests.conftest import running_server
 
 BASE_URL = "https://tracker.example.com"
 
@@ -245,10 +245,7 @@ class Redirecting(BaseHTTPRequestHandler):
 
 
 def test_redirects_are_refused_so_the_token_is_never_forwarded() -> None:
-    server = HTTPServer(("127.0.0.1", 0), Redirecting)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_server(Redirecting) as server:
         opener = urllib.request.build_opener(RefuseRedirects)
         request = urllib.request.Request(
             f"http://127.0.0.1:{server.server_port}/api/files/1",
@@ -256,8 +253,6 @@ def test_redirects_are_refused_so_the_token_is_never_forwarded() -> None:
         )
         with pytest.raises(ValueError, match="redirect"):
             opener.open(request, timeout=5)
-    finally:
-        server.shutdown()
 
 
 def test_default_client_refuses_redirects() -> None:
