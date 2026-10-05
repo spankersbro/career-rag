@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.142.2",
     "fastembed==0.8.1",
+    "onnxruntime==1.30.0",
     "pgvector==0.5.0",
     "psycopg[binary]==3.3.6",
     "pypdf==6.19.0",
@@ -40,6 +41,10 @@ select = ["E", "F", "I", "B", "UP", "S", "SIM"]
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["onnxruntime"]
+ignore_missing_imports = true  # ships no type information
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

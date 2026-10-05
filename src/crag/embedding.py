@@ -4,6 +4,7 @@ import math
 import re
 from typing import Protocol
 
+import onnxruntime
 from fastembed import TextEmbedding
 from tokenizers import Tokenizer
 
@@ -33,6 +34,9 @@ class FastEmbedder:
 
     def __init__(self, model: str, cache_dir: str) -> None:
         self.name = model
+        # Before the first session: onnxruntime's telemetry uploader sends usage events off the
+        # machine, and on macOS its worker thread can abort the process at exit (CRAG-6).
+        onnxruntime.disable_telemetry_events()
         self._model = TextEmbedding(model_name=model, cache_dir=cache_dir)
         model_tokenizer = self._model.model.tokenizer  # type: ignore[attr-defined]
         self.max_tokens: int = model_tokenizer.truncation["max_length"]
@@ -48,8 +52,7 @@ class FastEmbedder:
         return self.token_count(text) <= self.max_tokens
 
     def close(self) -> None:
-        """Releases the ONNX session. One still alive at interpreter exit, with other threads
-        running, can abort the process on macOS (seen with uvicorn and test servers)."""
+        """Releases the ONNX session and its memory."""
         self._model = None  # type: ignore[assignment]
         gc.collect()
 
