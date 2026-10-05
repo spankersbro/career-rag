@@ -67,11 +67,7 @@ def rows(conn: Connection, query: str) -> list[tuple[object, ...]]:
 
 @contextmanager
 def running_server(handler: type[BaseHTTPRequestHandler]) -> Iterator[HTTPServer]:
-    """A local HTTP server whose thread is joined and socket closed before the test ends.
-
-    A server thread still running at interpreter exit races onnxruntime's teardown on macOS
-    and can abort the whole test process.
-    """
+    """A local HTTP server whose thread is joined and socket closed before the test ends."""
     server = HTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()

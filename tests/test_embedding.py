@@ -2,17 +2,16 @@ import math
 import os
 from collections.abc import Iterator
 
+import onnxruntime
 import pytest
 
+from crag import embedding
 from crag.embedding import FastEmbedder, HashEmbedder, cosine
 
 
 @pytest.fixture(scope="module")
 def local_model() -> Iterator[FastEmbedder]:
-    """One model for the module, released before interpreter shutdown.
-
-    An ONNX session still alive at exit, with test threads around, aborts the process on macOS.
-    """
+    """One model for the module, released when the module's tests are done."""
     if not os.environ.get("CRAG__TEST__FASTEMBED"):
         pytest.skip("downloads a 0.22 GB model; CI sets CRAG__TEST__FASTEMBED=1 with a model cache")
     model = FastEmbedder(
@@ -87,3 +86,26 @@ def test_closed_local_model_refuses_to_embed() -> None:
     model.close()
     with pytest.raises(RuntimeError, match="closed"):
         model.embed(["text"])
+
+
+def test_onnx_telemetry_is_disabled_before_the_model_loads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """onnxruntime's telemetry uploader races interpreter exit on macOS and aborts (CRAG-6).
+
+    It also sends usage events off the machine, which this project must not do.
+    """
+    calls: list[str] = []
+
+    class FakeTextEmbedding:
+        def __init__(self, **_: object) -> None:
+            calls.append("model loaded")
+            raise RuntimeError("stop before any real model work")
+
+    monkeypatch.setattr(
+        onnxruntime, "disable_telemetry_events", lambda: calls.append("telemetry off")
+    )
+    monkeypatch.setattr(embedding, "TextEmbedding", FakeTextEmbedding)
+    with pytest.raises(RuntimeError, match="stop before"):
+        FastEmbedder("any-model", cache_dir="unused")
+    assert calls == ["telemetry off", "model loaded"]
